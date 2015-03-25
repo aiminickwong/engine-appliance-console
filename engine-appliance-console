@@ -1,0 +1,1136 @@
+#!/bin/bash
+##
+# oVirt Engine Management Tools. 
+# By:blkart.org@gmail.com
+##
+
+#Product infomation
+OVIRT_VERSION=3.5
+
+#Log file
+LOGFILE=/var/log/engine-appliance-console.log
+
+LOGGER(){
+
+if [ $2 == "B" ]; then
+   echo "******$1***BEGIN******" | logger -p local3.debug
+fi
+if [ $2 == "E" ]; then
+   echo "******$1****END*******" | logger -p local3.debug
+fi
+
+}
+
+GET_SYS_INFO(){
+##
+#Get system info
+##
+
+LOGGER $FUNCNAME B
+HOSTNAME=`hostname`
+ACTNIC=`sudo ip link | grep "state UP" | awk '{print $2}' | cut -d ":" -f 1`
+IPADDR=`sudo ifconfig $ACTNIC | grep "inet addr" | awk '{print $2}' | cut -d ":" -f 2`
+NETMASK=`sudo ifconfig $ACTNIC | grep "inet addr" | awk '{print $4}' | cut -d ":" -f 2`
+GATEWAY=`sudo route -n | grep "^0.0.0.0" | awk '{print $2}'`
+#DNS1=`sudo cat /etc/resolv.conf | head -1 | awk '{print $2}'`
+DNS1=`sudo grep '^nameserver' /etc/resolv.conf | head -1 | awk '{print $2}'`
+MAC=`sudo ifconfig $ACTNIC | grep "HWaddr" | awk '{print $5}'`
+SYSTIME=`sudo date`
+#  Get ovirt-engine run status 
+OVESTATE=UNKNOWN
+OVEVER=`sudo rpm -q ovirt-engine | cut -d "-" -f 3`
+if ! [ -z $OVEVER ];then
+   sudo service ovirt-engine status | grep -q "is running"
+   if [ $? -eq 0 ];then
+      OVESTATE=Running
+   else
+      OVESTATE=Stop
+   fi
+else
+   OVEVER="Not Install"
+fi
+LOGGER $FUNCNAME E
+
+}
+
+SUM_INFO(){
+##
+#Print Summary Information
+##
+#trap "$FUNCNAME" SIGINT
+trap '' SIGINT
+
+LOGGER $FUNCNAME B
+printf "\033c"
+
+GET_SYS_INFO
+
+echo "
+Welcome to the oVirt $OVIRT_VERSION Engine Appliance.
+
+To manage your appliance please browse to Web Portal.
+
+	Hostname:		$HOSTNAME
+	IP Address:		$IPADDR
+	Netmask:		$NETMASK
+	Gateway:		$GATEWAY
+	DNS:	 		$DNS1
+	MAC Address:		$MAC
+	System Time:		$SYSTIME
+	
+	Engine Version:		$OVEVER
+	Engine State:		$OVESTATE
+	Web Portal:		http://$IPADDR
+"
+if [ -e /.OCselected/engineadminpw ]; then
+   INITPW=`head -1 /.OCselected/engineadminpw`
+   echo -n -e "\033[33m[ NOTICE  ]:\033[0m "
+   echo "The initial password of Web Portal admin is \"$INITPW\". "
+   echo -n -e "\033[31m[ WARNING ]:\033[0m "
+   echo "Please change the Web Portal admin's password."
+fi
+echo
+if [ -e /.OCselected/reportsadminpw ]; then
+   INITREPPW=`head -1 /.OCselected/reportsadminpw`
+   echo -n -e "\033[33m[ NOTICE  ]:\033[0m "
+   echo "The initial password of Reports Portal admin is \"$INITREPPW\". "
+   echo -n -e "\033[31m[ WARNING ]:\033[0m "
+   echo "Please change the Reports Portal admin's password."
+fi
+echo
+echo -n "Press any key to continue."
+read -n1
+LOGGER $FUNCNAME E
+ADV_SET
+
+}
+
+CHECK_IP(){
+##
+#IP address validity check
+##   
+
+LOGGER $FUNCNAME B
+CHKIPRET=false
+if [ -z $CHECKIP ] &> /dev/null; then
+   CHKIPRET=true
+else
+   if [ $CHECKIP == "c" ]; then
+      break
+      ADV_SET
+   fi
+   sudo ipcalc -c $CHECKIP &>> $LOGFILE
+   if [ $? -eq 0 ]; then
+      CHKIPRET=true
+   else
+      CHKIPRET=false
+   fi
+fi
+LOGGER $FUNCNAME E
+
+}
+
+NETWORK_CONF(){
+##
+#IP/NETMASK/GATEWAY/DNS configuration
+##
+
+LOGGER $FUNCNAME B
+GET_SYS_INFO
+printf "\033c"
+echo "Network Configuration"
+echo
+echo "	IP Address:	$IPADDR
+	Netmask:	$NETMASK
+	Gateway:	$GATEWAY
+	DNS:		$DNS1
+"
+echo "Enter the new network configuration."
+echo
+read -p "Enter the IP Address or c to cancel: |$IPADDR| " SETIPADDR
+#echo "SETIPADDR $SETIPADDR" > /tmp/aa.txt
+while true ; do
+   CHECKIP=$SETIPADDR
+   if [ -z $SETIPADDR ] &> /dev/null; then
+      SETIPADDR=$IPADDR
+   fi
+   CHECK_IP
+   if $CHKIPRET ; then
+      read -p "Enter the Netmask or c to cancel: |$NETMASK| " SETNETMASK
+      while true ; do
+         CHECKIP=$SETNETMASK
+	 if [ -z $SETNETMASK ] &> /dev/null; then
+	    SETNETMASK=$NETMASK
+	 fi
+         CHECK_IP
+         if $CHKIPRET ; then
+            read -p "Enter the Gateway or c to cancel: |$GATEWAY| " SETGATEWAY
+            while true ; do
+               CHECKIP=$SETGATEWAY
+	       if [ -z $SETGATEWAY ] &> /dev/null; then
+	          SETGATEWAY=$GATEWAY
+	       fi
+               CHECK_IP
+               if $CHKIPRET ; then
+                  read -p "Enter the DNS or c to cancel: |$DNS1| " SETDNS
+                  while true ; do
+                     CHECKIP=$SETDNS
+	             if [ -z $SETDNS ] &> /dev/null; then
+	                SETDNS=$DNS1
+	             fi
+                     CHECK_IP
+		     if $CHKIPRET ; then 
+			printf "\033c"
+			echo "Network Configuration"
+			echo
+			echo "	IP Address:	$IPADDR	==>	$SETIPADDR
+	Netmask:	$NETMASK	==>	$SETNETMASK
+	Gateway:	$GATEWAY	==>	$SETGATEWAY
+	DNS:		$DNS1		==>	$SETDNS
+"
+			while true ; do
+			   read -p "Confirm the network configuration ([Y]es/[R]eset/[C]ancle): " SNCYN
+			   case $SNCYN in
+			   [yY])
+                              echo "It will take a while. Please wait. "
+		              sudo sed -i "s/BOOTPROTO.*/BOOTPROTO=none/g" /etc/sysconfig/network-scripts/ifcfg-$ACTNIC
+		              if `sudo grep -q "^IPADDR" /etc/sysconfig/network-scripts/ifcfg-$ACTNIC`; then
+		                 sudo sed -i "s/IPADDR.*/IPADDR=$SETIPADDR/g" /etc/sysconfig/network-scripts/ifcfg-$ACTNIC
+		              else
+		                 sudo sh -c "echo "IPADDR=$SETIPADDR" >> /etc/sysconfig/network-scripts/ifcfg-$ACTNIC"
+	      	              fi
+			      if ! [ -z $IPADDR ]; then
+			         if [ $IPADDR != "127.0.0.1" ]; then
+			            sudo sed -i "/$IPADDR/d" /etc/hosts
+#			            HOSTSENTRY="$SETIPADDR	$HOSTNAME"
+#			            sudo sh -c "echo $HOSTSENTRY >> /etc/hosts" 
+			         fi
+			      fi
+		              if `sudo grep -q "^NETMASK" /etc/sysconfig/network-scripts/ifcfg-$ACTNIC`; then
+		                 sudo sed -i "s/NETMASK.*/NETMASK=$SETNETMASK/g" /etc/sysconfig/network-scripts/ifcfg-$ACTNIC
+		              else
+		                 sudo sh -c "echo "NETMASK=$SETNETMASK" >> /etc/sysconfig/network-scripts/ifcfg-$ACTNIC"
+		              fi
+		              if `sudo grep -q "^GATEWAY" /etc/sysconfig/network-scripts/ifcfg-$ACTNIC`; then
+		                 sudo sed -i "s/GATEWAY.*/GATEWAY=$SETGATEWAY/g" /etc/sysconfig/network-scripts/ifcfg-$ACTNIC
+		              else
+		                 sudo sh -c "echo "GATEWAY=$SETGATEWAY" >> /etc/sysconfig/network-scripts/ifcfg-$ACTNIC"
+		              fi
+		              if `sudo grep -q "^DNS1" /etc/sysconfig/network-scripts/ifcfg-$ACTNIC`; then
+		                 sudo sed -i "s/DNS1.*/DNS1=$SETDNS/g" /etc/sysconfig/network-scripts/ifcfg-$ACTNIC
+		              else
+		                 sudo sh -c "echo "DNS1=$SETDNS" >> /etc/sysconfig/network-scripts/ifcfg-$ACTNIC"
+		              fi
+#	 		         sudo service network restart &>> $LOGFILE
+	 		         sudo service network restart
+                                 if [ $? -eq 0 ]; then
+			            if ! [ -z $SETIPADDR ]; then
+			               if [ $SETIPADDR != "127.0.0.1" ]; then
+			                  HOSTSENTRY="$SETIPADDR	$HOSTNAME"
+			                  sudo sh -c "echo $HOSTSENTRY >> /etc/hosts" 
+			               fi
+                                       #update engine-manage-domains configuration
+                                       [ -f /usr/share/ovirt-engine/ui-plugins/emdplugin.json ] && sudo sed -i "s/{\"allowedMessageOrigins\": \"https:.*\"}/{\"allowedMessageOrigins\": \"https:\/\/$SETIPADDR\"}/g" /usr/share/ovirt-engine/ui-plugins/emdplugin.json 
+                                       #update ovirt-optimizer configuration
+                                       [ -f /etc/ovirt-optimizer/ovirt-optimizer.properties ] && sudo sed -i "s/org.ovirt.optimizer.sdk.server=.*/org.ovirt.optimizer.sdk.server=$SETIPADDR/g" /etc/ovirt-optimizer/ovirt-optimizer.properties
+			            fi
+                                    echo
+                                    echo -ne "Network Configuration \033[32;1mSuccessfully\033[0m. Press any key to continue. " | tee -a $LOGFILE
+                                    read -n1
+                                 else
+                                    echo
+                                    echo -ne "Network Configuration \033[31;1mFailed\033[0m. Press any key to continue. " | tee -a $LOGFILE
+                                    read -n1
+                                 fi      
+                              break
+			   ;;
+			   [rR])
+			      NETWORK_CONF
+			   ;;
+			   [cC])
+			      ADV_SET
+			   ;;
+			   *)
+			      continue
+			   esac
+			done
+			break
+                     else
+			read -p "Enter the DNS or c to cancel: |$DNS1| " SETDNS
+                     fi
+                  done
+		  break
+	       else
+	          read -p "Enter the Netmask or c to cancel: |$GATEWAY| " SETGATEWAY
+	       fi
+            done
+            break
+         else
+            read -p "Enter the Netmask or c to cancel: |$NETMASK| " SETNETMASK
+         fi
+      done
+      break
+   else
+      read -p "Enter the IP Address or c to cancel: |$IPADDR| " SETIPADDR
+   fi
+done
+LOGGER $FUNCNAME E
+ADV_SET
+
+}
+
+SET_HOSTNAME(){
+##
+#HOSTNAME configuration
+##
+
+LOGGER $FUNCNAME B
+GET_SYS_INFO
+printf "\033c" 
+if [ $HOSTNAME != "localhost" ] && [ $HOSTNAME != "localhost.localdomain" ]; then
+   sudo sed -i "/$HOSTNAME/d" /etc/hosts
+#   echo "hostname: $HOSTNAME" >> /tmp/console.log
+fi
+if ! [ -z $IPADDR ]; then
+   if [ $IPADDR != "127.0.0.1" ]; then
+      sudo sed -i "/$IPADDR/d" /etc/hosts
+   fi
+fi
+read -p "Please enter the hostname: " SETHOSTNAME
+if ! [ -z $SETHOSTNAME ]; then
+   while true; do
+      read -p "Set the hostname to \"$SETHOSTNAME\" ([Y]es/[R]eset/[C]ancle): " SHNYN
+      case $SHNYN in
+      [yY])
+         echo -n "It will take a while. Please wait. " 
+         sudo hostname $SETHOSTNAME
+         if sudo grep -q "HOSTNAME" /etc/sysconfig/network ; then
+            sudo sed -i "s/^HOSTNAME.*/HOSTNAME=$SETHOSTNAME/g" /etc/sysconfig/network
+         else
+            sudo sed -i "1i HOSTNAME=$SETHOSTNAME" /etc/sysconfig/network
+         fi
+         HOSTSENTRY="$IPADDR	$SETHOSTNAME"
+         sudo sh -c "echo $HOSTSENTRY >> /etc/hosts" 
+         # ovirt-engine-rename will be check isodomain on engine host , if isodomain exsit , rename will be failed .
+         # this is workaround for rename .
+         sudo sed -i "s/^OVESETUP_CONFIG\/fqdn=*./OVESETUP_CONFIG\/fqdn=str:$SETHOSTNAME/g" /etc/ovirt-engine-setup.conf.d/20-setup-ovirt-post.conf
+         sudo sed -i "s/^ENGINE_REPORTS_BASE_URL=.*/ENGINE_REPORTS_BASE_URL=https:\/\/$SETHOSTNAME\/ovirt-engine-reports/g" /etc/ovirt-engine/engine.conf.d/10-setup-reports-access.conf
+         sudo /usr/share/ovirt-engine/setup/bin/ovirt-engine-rename --newname=$SETHOSTNAME --otopi-environment="OSETUP_RENAME/forceIgnoreAIAInCA=bool:'True' OVESETUP_CORE/engineStop=bool:'True' OSETUP_RENAME/confirmForceOverwrite=bool:'True'" &>> $LOGFILE
+         if [ $? -eq 0 ]; then
+            #update ovirt-optimizer configuration
+            [ -f /etc/ovirt-engine/ui-plugins/ovirt-optimizer-config.json ] && sudo sed -i "s/\"baseurl\":.*\//\"baseurl\": \"https:\/\/$SETHOSTNAME\/ovirt-optimizer\/result\//g" /etc/ovirt-engine/ui-plugins/ovirt-optimizer-config.json
+            echo
+            echo -ne "Hostname Configuration \033[32;1mSuccessfully\033[0m. Press any key to continue. " | tee -a $LOGFILE
+            read -n1
+         else
+            echo
+            echo -ne "Hostname Configuration \033[31;1mFailed\033[0m. Press any key to continue. " | tee -a $LOGFILE
+            read -n1
+         fi      
+         break
+      ;;
+      [cC])
+         ADV_SET
+      ;;
+      [rR])
+         SET_HOSTNAME
+      ;;
+      *)
+         continue
+      esac
+   done
+else
+   SET_HOSTNAME
+fi
+LOGGER $FUNCNAME E
+ADV_SET
+
+}
+
+NETWORK_TEST(){
+##
+#Network connectivity test
+##
+
+LOGGER $FUNCNAME B
+printf "\033c"
+echo "Test Network Configuration"
+echo
+while true; do
+read -p "Enter the hostname, ip address, or none to continue: " TESTADDR
+   if [ -z $TESTADDR ]; then
+#      ADV_SET
+      break
+   else
+      sudo ping -c 1 $TESTADDR &> /dev/null
+      if [ $? -eq 0 ]; then
+         echo "$TESTADDR: Success!"
+      else
+         echo "$TESTADDR: Failure, Check network settings."
+      fi
+   fi
+done
+LOGGER $FUNCNAME E
+ADV_SET
+
+}
+
+SET_DATE_TIME(){
+##
+#Date and Time configuration
+##
+
+LOGGER $FUNCNAME B
+printf "\033c"
+echo "Date and Time Configuration"
+echo
+read -p "Enter the current date (YYYY-MM-DD) or \"c\" to Cancel : " SETDATE
+if [ "x$SETDATE" == "xc" ]; then
+   ADV_SET
+fi
+while true ; do
+   date -d $SETDATE "+%F" 2> /dev/null | grep -q "$SETDATE" &>> $LOGFILE
+   if [ $? -eq 0 ];then
+      read -p "Enter the current time in 24 hour format (HH:MM:SS) or \"c\" to Cancel : " SETTIME
+      if [ $SETTIME == "c" ]; then
+         break
+      fi
+      while true ; do
+      date -d $SETTIME "+%T" 2> /dev/null | grep -q "$SETTIME" &>> $LOGFILE
+      if [ $? -eq 0 ];then
+         printf "\033c"
+         echo "Date and Time Configuration
+
+	Date :		$SETDATE
+	Time :		$SETTIME"
+	 echo
+	 read -p "Apply Date and Time configuration? ([Y]es/[N]o): " YN
+	 while true ; do
+            if [ $YN == "Y" ] &> /dev/null || [ $YN == "y" ] &> /dev/null; then
+	       sudo date -s $SETDATE &>> $LOGFILE
+	       sudo date -s $SETTIME &>> $LOGFILE
+	       break
+            elif [ $YN == "N" ] &> /dev/null || [ $YN == "n" ] &> /dev/null; then
+	       ADV_SET
+            else
+	       echo 'Please enter "Y" or "N".'
+	       read -p "Apply Date and Time configuration? ([Y]es/[N]o): " YN
+            fi
+	 done
+         break
+      else
+         read -p "Enter the current time in 24 hour format (HH:MM:SS) or \"c\" to Cancel : " SETTIME
+         if [ $SETTIME == "c" ]; then
+            break
+         fi
+      fi
+      done
+      break
+   else
+      read -p "Enter the current date (YYYY-MM-DD) or \"c\" to Cancel : " SETDATE
+      if [ "x$SETDATE" == "xc" ]; then
+         break
+      fi
+   fi
+done
+LOGGER $FUNCNAME E
+ADV_SET
+
+}
+
+HOSTS_FILE(){
+##
+#Modify the /etc/hosts file
+##
+
+LOGGER $FUNCNAME B
+printf "\033c"
+sudo cp -f /etc/hosts /tmp/hosts
+#sudo chown admin /tmp/hosts
+sudo chown engineadm /tmp/hosts
+vi /tmp/hosts
+sudo cp -f /tmp/hosts /etc/hosts
+rm -rf /tmp/hosts
+LOGGER $FUNCNAME E
+ADV_SET
+
+}
+
+##HOSTNAME_CHECK(){
+####
+###Check the host name is not "localhost.localdomain"
+####
+##
+##echo
+##if [ $HOSTNAME == "localhost.localdomain" ];then
+##   echo -n 'We do not recommend using "localhost.localdomain" as the hostname. 
+##Please modify the hostname. Press any key to continue.'
+##   read -n1
+##   ADV_SET
+##fi
+##
+##}
+
+##ENGINE_INIT(){
+####
+###When modify the hostname call the ovirt-engine-rename script to regenerate the apache certificate.
+####
+##
+##printf "\033c"
+##
+##HOSTNAME_CHECK
+##echo
+##if [ -e /.OCselected/engine-init.lock ]; then
+##   echo -n "Engine already initialized. Press any key to continue."
+##   read -n1
+##   ADV_SET
+##else 
+##   read -p "Engine Initailization (Y/N): " ENGINIYN
+##   while true; do
+##      if [ -z $ENGINIYN ]; then
+##         read -p "Engine Initailization (Y/N): " ENGINIYN
+##      elif [ $ENGINIYN == Y ] || [ $ENGINIYN == y ];then
+###         engine init
+##         sudo /usr/share/ovirt-engine/setup/bin/ovirt-engine-rename --newname=$HOSTNAME
+##         if [ $? -eq 0 ]; then
+##	    echo -n "Engine initialized successfully. Press any key to continue."
+##	    read -n1
+##            sudo mkdir /.OCselected &> /dev/null
+##            sudo touch /.OCselected/engine-init.lock &> /dev/null
+##	 else
+##	    echo -n "Engine initialized failed. Press any key to continue."
+##            read -n1
+##         fi
+##         break
+##      elif [ $ENGINIYN == N ] || [ $ENGINIYN == n ];then
+##         ADV_SET
+##         break
+##      else
+##         read -p "Engine Initailization (Y/N): " ENGINIYN
+##      fi
+##   done
+##   ADV_SET
+##fi
+##
+##}
+
+ENGINE_RESTART(){
+##
+#Restart ovirt-engine service
+##
+
+LOGGER $FUNCNAME B
+printf "\033c"
+echo
+read -p "Engine Restart ([Y]es/[N]o): " ENGREST
+while true; do
+   if [ -z $ENGREST ]; then
+      read -p "Engine Restart ([Y]es/[N]o): " ENGREST
+   elif [ $ENGREST == Y ] || [ $ENGREST == y ];then
+#      echo "Engine Restart"
+      sudo service ovirt-engine restart &>> $LOGFILE
+      if [ $? -eq 0 ]; then
+         echo -ne "Engine restart \033[32;1mSuccessfully\033[0m. Press any key to continue."
+	 read -n1
+      else
+         echo -ne "Engine restart \033[31;1mFailed\033[0m. Press any key to continue."
+         read -n1
+      fi
+      break
+   elif [ $ENGREST == N ] || [ $ENGREST == n ];then
+      ADV_SET
+      break
+   else
+      read -p "Engine Restart ([Y]es/[N]o): " ENGREST
+   fi
+done
+LOGGER $FUNCNAME E
+ADV_SET
+
+}
+
+RESET_ADMINPW(){
+
+LOGGER $FUNCNAME B
+printf "\033c"
+read -sp "New password :" SETNEWADMPWD
+if [ -z $SETNEWADMPWD ]; then
+   echo
+   echo -n "Password cannot be empty. Press any key to continue."
+   read -n1
+   RESET_ADMINPW
+fi
+echo
+read -sp "Retype new password :" SETRETNEWADMPWD
+if [ -z $SETRETNEWADMPWD ]; then
+   echo
+   echo -n "Sorry, passwords do not match. Press any key to try again."
+   read -n1
+   RESET_ADMINPW
+fi
+echo
+while true ; do
+   if [ $SETNEWADMPWD != $SETRETNEWADMPWD ]; then
+      echo -n "Sorry, passwords do not match. Press any key to try again."
+      read -n1
+      RESET_ADMINPW
+   else
+      echo "It will take a while. Please wait. "
+      sudo sh -c "echo $SETNEWADMPWD > /.OCselected/newpas" &>> $LOGFILE
+      sudo engine-config -s AdminPassword --admin-pass-file=/.OCselected/newpas &>> $LOGFILE
+      if [ $? -eq 0 ]; then
+         sudo rm -rf /.OCselected/newpas
+         #update optimizer configuration
+         [ -f /etc/ovirt-optimizer/ovirt-optimizer.properties ] && sudo sed -i "s/org.ovirt.optimizer.sdk.password=.*/org.ovirt.optimizer.sdk.password=$SETNEWADMPWD/g" /etc/ovirt-optimizer/ovirt-optimizer.properties
+         #update vm-backup configuration
+         [ -f /etc/engine-vm-backup/engine-vm-backup.properties ] && sudo sed -i "s/^engineSdkPassword=.*/engineSdkPassword=$SETNEWADMPWD/g" /etc/engine-vm-backup/engine-vm-backup.properties
+         sudo service engine-vm-backup restart &>> $LOGFILE
+         sudo service ovirt-optimizer restart &>> $LOGFILE
+         sudo service ovirt-engine restart &>> $LOGFILE
+         if [ $? -eq 0 ]; then
+            sudo rm -rf /.OCselected/engineadminpw
+            echo -ne "Password change \033[32;1mSuccessfully\033[0m. Press any key to continue."
+            read -n1
+            break
+         else
+            echo -ne "Password change \033[31;1mFailed\033[0m. Press any key to continue."
+            read -n1
+            break
+         fi
+      else
+         echo -ne "Password change \033[31;1mFailed\033[0m. Press any key to continue."
+         read -n1
+         break
+      fi
+   fi
+done
+LOGGER $FUNCNAME E
+ADV_SET
+
+}
+
+GET_PWD(){
+##
+#GET PASSWD
+##
+
+#while : ;do
+#    char=`
+#        stty cbreak -echo
+#        dd if=/dev/tty bs=1 count=1 2>/dev/null
+#        stty -cbreak echo
+#    `
+#    if [ "$char" =  "" ];then
+#        break
+#    fi
+#    password="$password$char"
+#    echo -n "*"
+#done
+#echo
+read -s -n 1 ;[[ -z $REPLY ]] && return || echo -n "*";ADMPWD=$ADMPWD$REPLY;GET_PWD
+
+}
+
+WGT_DOMAIN_INIT(){
+##
+#WGT_DOMAIN ISO domain initialization
+##
+LOGGER $FUNCNAME B
+GET_SYS_INFO
+printf "\033c"
+IFINIT=false
+ADMPWD=""
+
+#verify engine health
+ENGINEHEALTH=`curl http://$IPADDR/ovirt-engine/services/health 2> /dev/null`
+if ! [ "x$ENGINEHEALTH" == 'xDB Up!Welcome to Health Status!' ]; then
+   echo -n "Engine is not running ! Please verify the engine status ."
+   read -n1
+else
+   echo -n "Please enter the password for admin@internal: "
+   GET_PWD
+   echo
+   #verify password
+   sudo curl -k -u admin@internal:$ADMPWD https://$IPADDR/api/ 2> /dev/null | grep 'product_info' &> /dev/null
+   if [ $? -eq 0 ]; then
+      IFINIT=true
+      #generate ovirtshelrc file
+      cat > ~/.ovirtshellrc <<EOF
+[cli]
+autoconnect = True
+autopage = True
+[ovirt-shell]
+username = admin@internal
+timeout = None
+extended_prompt = False
+url = https://$IPADDR/api
+insecure = True
+renew_session = False
+filter = False
+session_timeout = None
+ca_file = None
+dont_validate_cert_chain = False
+key_file = None
+password = $ADMPWD
+cert_file = None
+EOF
+   else
+      #password is wrong , retry
+      while true ; do
+         read -p "Password is wrong. ([R]eset/[E]xit): " PWRE
+         case $PWRE in
+         [rR])
+            WGT_DOMAIN_INIT
+#            break
+         ;;
+         [eE])
+            break
+         ;;
+         *)
+            continue
+         esac
+      done
+   fi
+fi
+
+if $IFINIT ; then
+   #HOSTSNUM=`ovirt-shell -E "list hosts" | grep id | wc -l`
+   #verify there have an activing host
+   echo "-----------------------------------------------------"
+   echo -n "[1/6]Activing Host. Verifing ... "
+   ovirt-shell -E 'list hosts --show-all' | grep 'status-state' | grep -q 'up'
+   if [ $? -ne 0 ]; then
+      echo -e "\033[31;1m[Failed]\033[0m"
+      echo "-----------------------------------------------------"
+      echo "There doesn't exsit activing host."
+      echo -n "Press any key to continue. "
+      read -n1
+   else
+      echo -e "\033[32;1m [OK]\033[0m"
+      #verify WGT_DOMAIN exsit
+      echo -n "[2/6]WGT_DOMAIN exsit. Verifing ... "
+      ovirt-shell -E "list storagedomains" | grep -q "WGT_DOMAIN"
+      if [ $? -ne 0 ]; then
+         echo -e "\033[31;1m[Failed]\033[0m"
+         echo "-----------------------------------------------------"
+         echo "WGT_DOMAIN dose not exsit."
+         echo -n "Press any key to continue. "
+         read -n1
+      else
+         echo -e "\033[32;1m [OK]\033[0m"
+         #verify WGT_DOMAIN unattached
+         echo -n "[3/6]WGT_DOMAIN unattached. Verifing ... "
+         ovirt-shell -E 'list storagedomains --query "name=WGT_DOMAIN" --show-all' | grep 'status-state' | grep -q 'unattached'
+         if [ $? -ne 0 ]; then
+            echo -e "\033[31;1m[Failed]\033[0m"
+            echo "-----------------------------------------------------"
+            echo "Please dettach \"WGT_DOMAIN\" from any DataCenter."
+            echo -n "Press any key to continue. "
+            read -n1
+         else
+            echo -e "\033[32;1m [OK]\033[0m"
+            #verify WGT_DOMAIN alailable
+            echo -n "[4/6]WGT_DOMAIN available. Verifing ... "
+            TEST_MOUNT_POINT=/mnt/storage_test
+            sudo mkdir -p $TEST_MOUNT_POINT &>> $LOGFILE
+            sudo mount $IPADDR:/var/lib/exports/iso $TEST_MOUNT_POINT &>> $LOGFILE
+            sudo -u vdsm touch $TEST_MOUNT_POINT/IO_TEST &>> $LOGFILE
+            if [ $? -ne 0 ]; then
+               sudo umount $TEST_MOUNT_POINT &>> $LOGFILE
+               sudo rm -rf $TEST_MOUNT_POINT
+               echo -e "\033[31;1m[Failed]\033[0m"
+               echo "-----------------------------------------------------"
+               echo "Please check the nfs sharing \"$IPADDR:/var/lib/exports/iso\"."
+               echo -n "Press any key to continue. "
+               read -n1
+            else
+               sudo rm -rf $TEST_MOUNT_POINT/IO_TEST &>> $LOGFILE
+               sudo umount $TEST_MOUNT_POINT &>> $LOGFILE
+               sudo -u vdsm rm -rf $TEST_MOUNT_POINT &>> $LOGFILE
+               echo -e "\033[32;1m [OK]\033[0m"
+               #remove old domain
+               echo -n "[5/6]Remove old domain. Removing ... "
+               HOSTID=`ovirt-shell -E "list hosts  --query status=up" | grep id  | head -1 | awk '{print $3}'`
+               ovirt-shell -E "remove storagedomain WGT_DOMAIN --host-id $HOSTID" | grep 'status-state' | grep -q 'complete'
+               if [ $? -ne 0 ]; then
+                  echo -e "\033[31;1m[Failed]\033[0m"
+                  echo "-----------------------------------------------------"
+                  echo "WGT_DOMAIN remove failed."
+                  echo -n "Press any key to continue. "
+                  read -n 1
+               else
+                  echo -e "\033[32;1m [OK]\033[0m"
+                  #import WGT_DOMAIN
+                  echo -n "[6/6]Import WGT_DOMAIN. Importing ... "
+                  ovirt-shell -E "add storagedomain --host-id $HOSTID --type iso --storage-type nfs --storage-address $IPADDR --storage-path /var/lib/exports/iso" | grep 'name' | grep -q 'WGT_DOMAIN'
+                  if [ $? -ne 0 ]; then
+                     echo -e "\033[31;1m[Failed]\033[0m"
+                     echo "-----------------------------------------------------"
+                     echo "WGT_DOMAIN initialization failed."
+                     echo -n "Press any key to continue. "
+                     read -n1
+                  else
+                     echo -e "\033[32;1m [OK]\033[0m"
+                     echo "-----------------------------------------------------"
+                     echo -e "WGT_DOMAIN initialization \033[32;1mSuccessfully\033[0m."
+                     echo -n "Press any key to continue. "
+                     read -n1
+                  fi
+                  rm -rf ~/.ovirtshellrc
+               fi
+            fi
+         fi
+      fi
+   fi
+fi
+
+ENGINE_ADVANCE_CONF
+
+LOGGER $FUNCNAME E
+}
+
+RESET_REPORTS_ADMINPW(){
+##
+#Reset reports portal 'admin' user password
+##
+
+LOGGER $FUNCNAME B
+printf "\033c"
+read -sp "New password :" SetNewReportsAdmPwd
+if [ -z $SetNewReportsAdmPwd ]; then
+   echo
+   echo -n "Password cannot be empty. Press any key to continue."
+   read -n1
+   RESET_REPORTS_ADMINPW
+fi
+echo
+read -sp "Retype new password :" SetRetNewReportsAdmPwd
+if [ -z $SetRetNewReportsAdmPwd ]; then
+   echo
+   echo -n "Sorry, passwords do not match. Press any key to try again."
+   read -n1
+   RESET_REPORTS_ADMINPW
+fi
+echo
+while true ; do
+   if [ "x$SetNewReportsAdmPwd" != "x$SetRetNewReportsAdmPwd" ]; then
+      echo -n "Sorry, passwords do not match. Press any key to try again."
+      read -n1
+      RESET_REPORTS_ADMINPW
+   else
+      #Modify the password
+      echo "It will take a while. Please wait. "
+      sudo engine-reports-config-passwd --user=admin --password=$SetNewReportsAdmPwd --non-interactive &>> $LOGFILE
+      if [ $? -eq 0 ]; then
+         sudo rm -rf /.OCselected/reportsadminpw
+         echo -ne "Password change \033[32;1mSuccessfully\033[0m. Press any key to continue."
+         read -n1
+         break
+      else
+         echo -ne "Password change \033[31;1mFailed\033[0m. Press any key to continue."
+         read -n1
+         break
+      fi
+   fi
+done
+
+LOGGER $FUNCNAME E
+ADV_SET
+
+}
+
+RESET_DB_PWD(){
+##
+#Reset Database users (engine/ovirt_engine_history/ovirt_engine_reports) password
+##
+LOGGER $FUNCNAME B
+sudo /usr/bin/ovirt-reset-db-password
+reset
+LOGGER $FUNCNAME E
+ADV_SET
+
+}
+
+
+ENGINE_ADVANCE_CONF(){
+##
+#Cleanup the Engine configuration and reconfiguration
+##
+
+LOGGER $FUNCNAME B
+printf "\033c"
+echo "Engine Advanced Configuration"
+echo
+echo "
+1) Engine Cleanup 
+2) Engine Setup 
+3) Reset Web Portal 'admin' user password 
+4) WGT_DOMAIN initialization
+5) Reset Reports Portal 'admin' user password
+6) Reset Database password
+7) Back
+"
+echo 
+read -p "Choose the advanced setting: " ENGADVCONF
+case $ENGADVCONF in
+1)
+while true; do
+   read -p "Engine Cleanup ([Y]es/[N]o) :" ECYN
+   case $ECYN in
+   [yY])
+      sudo engine-cleanup
+      if [ $? -eq 0 ]; then
+         echo -e "Engine Cleanup \033[32;1mSuccessfully\033[0m !"
+      else
+         echo -e "Engine Cleanup \033[31;1mFailed\033[0m !"
+      fi
+      echo -n "Press any key to continue."
+      read -n1
+      break
+      ENGINE_ADVANCE_CONF
+   ;;
+   [nN])
+      ENGINE_ADVANCE_CONF
+   ;;
+   *)
+      continue
+   esac
+done
+;;
+2)
+while true; do
+   read -p "Engine Setup ([Y]es/[N]o): " ESYN
+   case $ESYN in
+   [yY])
+      sudo engine-setup
+      if [ $? -eq 0 ]; then
+         echo -e "Engine Setup \033[32;1mSuccessfully\033[0m !"
+      else
+         echo -e "Engine Setup \033[31;1mFailed\033[0m !"
+      fi
+      echo -n "Press any key to continue."
+      read -n1
+      ENGINE_ADVANCE_CONF
+   ;;
+   [nN])
+      ENGINE_ADVANCE_CONF
+   ;;
+   *)
+      continue
+   esac
+done
+;;
+3)
+   RESET_ADMINPW 
+;;
+4)
+   WGT_DOMAIN_INIT
+;;
+5)
+   RESET_REPORTS_ADMINPW
+;;
+6)
+   RESET_DB_PWD
+;;
+7)
+   ADV_SET
+;;
+*)
+   ENGINE_ADVANCE_CONF 
+esac
+LOGGER $FUNCNAME E
+
+}
+
+APPLIANCE_RESTART(){
+##
+#Appliance restart
+##
+
+LOGGER $FUNCNAME B
+printf "\033c"
+echo
+read -p "Restart the System ([Y]es/[N]o): " APPLREST
+while true; do
+   if [ -z $APPLREST ]; then
+      read -p "Restart the System ([Y]es/[N]o): " APPLREST
+   elif [ $APPLREST == Y ] || [ $APPLREST == y ];then
+#      echo "Restart System"
+         sudo init 6
+      break
+   elif [ $APPLREST == N ] || [ $APPLREST == n ];then
+      ADV_SET
+      break
+   else
+      read -p "Restart the System ([Y]es/[N]o): " APPLREST
+   fi
+done
+LOGGER $FUNCNAME E
+
+}
+
+APPLIANCE_SHUTDOWN(){
+##
+#Appliance shutdown
+##
+
+LOGGER $FUNCNAME B
+printf "\033c"
+echo
+read -p "Shutdown the System ([Y]es/[N]o): " APPLSHUTDOWN
+while true; do
+   if [ -z $APPLSHUTDOWN ]; then
+      read -p "Shutdown the System ([Y]es/[N]o): " APPLSHUTDOWN
+   elif [ $APPLSHUTDOWN == Y ] || [ $APPLSHUTDOWN == y ];then
+      sudo init 0
+      break
+   elif [ $APPLSHUTDOWN == N ] || [ $APPLSHUTDOWN == n ];then
+      ADV_SET
+      break
+   else
+      read -p "Shutdown the System ([Y]es/[N]o): " APPLSHUTDOWN
+   fi
+done
+LOGGER $FUNCNAME E
+
+}
+
+APPLIANCE_RESTART_SHUTDOWN(){
+##
+#Appliance Restart or Shutdown
+##
+
+LOGGER $FUNCNAME B
+printf "\033c"
+echo
+echo "Restart or Shutdown the System."
+echo "
+1) Restart the System 
+2) Shutdown the System
+3) Back
+"
+read -p "Choose the advanced setting: " RESTARTORSHUTDOWN
+case $RESTARTORSHUTDOWN in
+1)
+   APPLIANCE_RESTART
+;;
+2)
+   APPLIANCE_SHUTDOWN
+;;
+3)
+   ADV_SET
+;;
+*)
+   APPLIANCE_RESTART_SHUTDOWN
+esac
+LOGGER $FUNCNAME E
+
+}
+
+SU_ROOT(){
+##
+#Get a shell. Switch to root.
+##
+
+LOGGER $FUNCNAME B
+printf "\033c"
+sudo su root
+LOGGER $FUNCNAME E
+ADV_SET
+
+}
+
+HELP(){
+##
+#For help
+##
+
+LOGGER $FUNCNAME B
+printf "\033c"
+sudo less /usr/share/doc/engine-appliance-console/HELP.md
+LOGGER $FUNCNAME E
+ADV_SET
+
+}
+
+ADV_SET(){
+##
+#Advanced Configuration Page
+##
+
+LOGGER $FUNCNAME B
+printf "\033c"
+echo "
+
+Advanced Setting
+
+1) Network Configuration
+2) Test Network Configuration
+3) Set Hostname
+4) Set Date and Time
+5) Hosts File Configuration
+6) Engine Restart
+7) Engine Advance Setting
+8) System Restart or Shutdown
+9) Shell
+10) Summary Information
+11) HELP
+12) Log OFF
+
+"
+read -p "Choose the advanced setting: " SELNUM
+case $SELNUM in
+1)
+   NETWORK_CONF
+;;
+2)
+   NETWORK_TEST
+;;
+3)
+   SET_HOSTNAME
+;;
+4)
+   SET_DATE_TIME
+;;
+5)
+   HOSTS_FILE
+;;
+6)
+   ENGINE_RESTART
+;;
+7)
+   ENGINE_ADVANCE_CONF
+;;
+8)
+   APPLIANCE_RESTART_SHUTDOWN
+;;
+9)
+   SU_ROOT
+;;
+10)
+   SUM_INFO
+;;
+11)
+   HELP
+;;
+12)
+   echo "#########LOGOUT#########" | logger -p local3.debug 
+   exit
+;;
+*)
+   ADV_SET
+esac
+LOGGER $FUNCNAME E
+
+}
+
+MAIN(){
+##
+#main
+##
+[ -w $LOGFILE ] || sudo chown engineadm $LOGFILE
+echo "#########LOGIN##########" | logger -p local3.debug
+SUM_INFO
+}
+
+MAIN
